@@ -27,35 +27,21 @@ struct http_header parse_header(char* header)
 	return parsed_header;
 }
 
-//This checks wether the requested file is listed in the .website_files file
-char* getFile(char *fileStr)
+char *readFile(char *fileStr)
 {
-	FILE * fp;
-    char * line = NULL;
-    size_t len = 0;
-    ssize_t read;
+	FILE *filePointer = fopen(fileStr, "rb");
+	
+	if(filePointer == NULL)
+		return NULL;
+	fseek(filePointer, 0, SEEK_END);
+	long fsize = ftell(filePointer);
+	fseek(filePointer, 0, SEEK_SET);
 
-    fp = fopen(".website_files", "r");
-    if (fp == NULL)
-	{
-		perror("Failed to open .website_files");
-		return "500.html";
-	}
-
-    while ((read = getline(&line, &len, fp)) != -1)
-	{
-		if(strcmp(strtok(line, " "), fileStr) == 0)
-		{
-			fclose(fp);
-			char* return_value = strtok(NULL, " ");				
-			// Return the file to read
-			return return_value;	
-			if(line)
-				free(line);
-		}
-    }
-	fclose(fp);
-	return "404.html";
+	char *buffer = malloc(fsize + 1);
+	fread(buffer, 1, fsize, filePointer);
+	buffer[fsize] = '\0';
+	fclose(filePointer);
+	return buffer;
 }
 
 int socket_desc;
@@ -86,71 +72,87 @@ void startServer(short port)
 void *connection_handler(void *socket_desc)
 {
 	char client_message[2000];
-	char *http_server_header = "HTTP/1.0 200 OK\r\n\r\n";
+	int http_status_code = 200;
+	char *http_server_header;
 	int sock = *(int*)socket_desc;
 
 	//Get message sent by browser
 	recv(sock, client_message , sizeof(client_message)/sizeof(client_message[0]), 0);
 	struct http_header request = parse_header(client_message);
 	if(request.method == NULL || request.file == NULL)
+		http_status_code = 400;
+
+	FILE *filePointer;
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+	char *fileToRead = NULL;
+
+    filePointer = fopen(".website_files", "r");
+    if (filePointer != NULL)
 	{
-		http_server_header = "HTTP/1.0 400 Bad Request\r\n\r\n";
+		while ((read = getline(&line, &len, filePointer)) != -1)
+			if(strcmp(strtok(line, " "), request.file) == 0)
+			{
+				fclose(filePointer);
+				fileToRead = strtok(NULL, " ");		
+				break;
+			}
+	}
+	else
+	{
+		perror("Failed to open .website_files");
+		http_status_code = 500;
 	}
 
-	char *fileToRead;
-	fileToRead = getFile(request.file);
-	if(strcmp(fileToRead,"404.html") == 0)
+	if(fileToRead == NULL)
+		http_status_code = 404;
+
+	switch(http_status_code)
 	{
-		//Send back the desierd content
-		http_server_header = "HTTP/1.0 404 Not Found\r\n\r\n";
-	}
-	else if(strcmp(fileToRead,"500.html") == 0)
-	{
-		http_server_header = "HTTP/1.0 500 Internal Server Error\r\n\r\n";
+		case 400:
+			http_server_header = "HTTP/1.0 400 Bad Request\r\n\r\n";
+			fileToRead = "400.html";
+			break;
+		case 404:
+			http_server_header = "HTTP/1.0 404 File Not Found\r\n\r\n";
+			fileToRead = "404.html";
+			break;
+		case 500:
+			http_server_header = "HTTP/1.0 500 Internal Server Error\r\n\r\n";
+			fileToRead = "500.html";
+			break;
+		case 200:
+		default:
+			http_server_header = "HTTP/1.0 200 File Not Found\r\n\r\n";
 	}
 
 	
 	//Open and read the contents of the requested file.
-	FILE *f = fopen(fileToRead, "rb");
+	char *fileOutput = readFile(fileToRead);
 	
-	if(f != NULL)
+	if(fileOutput == NULL)
 	{
-		fseek(f, 0, SEEK_END);
-		long fsize = ftell(f);
-		fseek(f, 0, SEEK_SET);
-
-		char *buffer = malloc(fsize + 1);
-		fread(buffer, 1, fsize, f);
-		buffer[fsize] = '\0';
-		fclose(f);
-
-		char *message = malloc(strlen(buffer)+strlen(http_server_header));
-		memset(message, 0, sizeof(message));
-		strcat(message,http_server_header);
-		strcat(message,buffer);
-		free(buffer);
-		//Send back the desierd content
-		if(write(sock, message, strlen(message)) > 0)
-		{
-			perror("Failed to send message via socket.");
-		}
-		memset(client_message, 0, strlen(client_message));
-		free(message);
+		perror("Failed to open file.");
+		return 0;
 	}
-	else
+	char *message = calloc(strlen(fileOutput)+strlen(http_server_header), sizeof(char));
+	strcat(message,http_server_header);
+	strcat(message,fileOutput);
+	free(fileOutput);
+	//Send back the desierd content
+	if(write(sock, message, strlen(message)) == -1)
 	{
-		perror("Failed to open file");
-		//Incase everything fails this ensures that the server will atleast send a 500 back to the client.
-		http_server_header = "HTTP/1.0 500 Internal Server Error\r\n\r\n";
-		if(write(sock, http_server_header, strlen(http_server_header)) > 0)
-		{
-			perror("Failed to send message via socket.");
-		}
+		perror("Failed to send message via socket.");
 	}
-	
-	memset(client_message, 0, strlen(client_message));
+	memset(client_message, 0, sizeof(client_message));
+	free(message);
+	if(line)
+		free(line);
 	close(sock);
+	sock = -1;
 	free(socket_desc);
+	
 	return 0;
 }
 
