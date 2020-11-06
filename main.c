@@ -5,6 +5,34 @@
 
 #define DEFAULT_PORT 1337
 
+static inline void *MallocOrDie(size_t MemSize)
+{
+    void *AllocMem = malloc(MemSize);
+    /* Some implementations return null on a 0 length alloc,
+     * we may as well allow this as it increases compatibility
+     * with very few side effects */
+    if(!AllocMem && MemSize)
+    {
+        printf("Could not allocate memory!");
+        exit(-1);
+    }
+    return AllocMem;
+}
+
+static inline void *CallocOrDie(size_t Size, size_t Type)
+{
+    void *AllocMem = calloc(Size, Type);
+    /* Some implementations return null on a 0 length alloc,
+     * we may as well allow this as it increases compatibility
+     * with very few side effects */
+    if(!AllocMem && Size && Type)
+    {
+        printf("Could not allocate memory!");
+        exit(-1);
+    }
+    return AllocMem;
+}
+
 size_t strlcpy(char *dst, const char *src, size_t dstsize)
 {
 	size_t len = strlen(src);
@@ -29,7 +57,7 @@ long long readFile(char *fileStr, char **buffer)
 	long fsize = ftell(filePointer);
 	fseek(filePointer, 0, SEEK_SET);
 
-	char *tmpBuffer = malloc(fsize + 1);
+	char *tmpBuffer = MallocOrDie(fsize + 1);
 	fread(tmpBuffer, 1, fsize, filePointer);
 	buffer[fsize] = '\0';
 	fclose(filePointer);
@@ -92,25 +120,25 @@ void *connection_handler(void *socket_desc)
 	{
 		case 400:
 			strlcpy(response.header, "HHTTP/1.0 400 Bad Request",sizeof(response.header)/sizeof(char));
-			fileToRead = malloc(strlen("xxx.html")+1);
-			strlcpy(fileToRead,"400.html", strlen("xxx.html")+1);
+			fileToRead = MallocOrDie(strlen("400.html")+1);
+			strlcpy(fileToRead,"400.html", strlen("400.html")+1);
 			break;
 		case 404:
 			strlcpy(response.header, "HTTP/1.0 404 File Not Found",sizeof(response.header)/sizeof(char));
-			fileToRead = malloc(strlen("xxx.html")+1);
-			strlcpy(fileToRead,"404.html", strlen("xxx.html")+1);
+			fileToRead = MallocOrDie(strlen("404.html")+1);
+			strlcpy(fileToRead,"404.html", strlen("404.html")+1);
 			break;
 		case 500:
 			strlcpy(response.header, "HTTP/1.0 500 Internal Server Error",sizeof(response.header)/sizeof(char));
-			fileToRead = malloc(strlen("xxx.html")+1);
-			strlcpy(fileToRead,"500.html", strlen("xxx.html")+1);
+			fileToRead = MallocOrDie(strlen("500.html")+1);
+			strlcpy(fileToRead,"500.html", strlen("500.html")+1);
 			break;
 		case 200:
 		default:
 			strlcpy(response.header, "HTTP/1.0 200 OK",sizeof(response.header)/sizeof(char));
 	}
 	
-	//Open and read the contents of the requested file.
+	/* Open and read the contents of the requested file. */
 	response.content_length = readFile(fileToRead, &response.data);
 	if(response.data == NULL)
 	{
@@ -138,7 +166,7 @@ void *connection_handler(void *socket_desc)
 			strlen("\r\n")+
 			strlen("\r\n");
 
-	char *message = calloc(resp_length,sizeof(char));
+	char *message = CallocOrDie(resp_length,sizeof(char));
 
 	strcat(message,response.header);
 	strcat(message, "\r\n");
@@ -193,7 +221,7 @@ int main(int argc, char **argv)
 	while((new_socket = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)))
 	{
 		pthread_t sniffer_thread;
-		new_sock = malloc(1);
+		new_sock = MallocOrDie(1);
 		*new_sock = new_socket;
 		
 		if(pthread_create(&sniffer_thread, NULL, connection_handler, (void*)new_sock) < 0)
