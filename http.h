@@ -1,6 +1,7 @@
 #ifndef HTTP_H
 #define HTTP_H
 #include <string.h>
+
 //Currently the web server only cares about the method and the file that is requested.
 struct http_header
 {

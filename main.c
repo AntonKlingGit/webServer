@@ -1,77 +1,11 @@
 #include <pthread.h>
+#include <bsd/string.h>
+#include <getopt.h>
 #include "config.h"
 #include "http.h"
 #include "socket.h"
 
 #define DEFAULT_PORT 1337
-
-static inline void *MallocOrDie(size_t MemSize)
-{
-    void *AllocMem = malloc(MemSize);
-    /* Some implementations return null on a 0 length alloc,
-     * we may as well allow this as it increases compatibility
-     * with very few side effects */
-    if(!AllocMem && MemSize)
-    {
-        printf("Could not allocate memory!");
-        exit(-1);
-    }
-    return AllocMem;
-}
-
-static inline void *CallocOrDie(size_t Size, size_t Type)
-{
-    void *AllocMem = calloc(Size, Type);
-    /* Some implementations return null on a 0 length alloc,
-     * we may as well allow this as it increases compatibility
-     * with very few side effects */
-    if(!AllocMem && Size && Type)
-    {
-        printf("Could not allocate memory!");
-        exit(-1);
-    }
-    return AllocMem;
-}
-
-size_t strlcpy(char *dst, const char *src, size_t dstsize)
-{
-	size_t len = strlen(src);
-	if(dstsize)
-	{
-		size_t bl = (len < dstsize-1 ? len : dstsize-1);
-		((char*)memcpy(dst, src, bl))[bl] = 0;
-	}
-	return len;
-}
-
-long long readFile(char *fileStr, char **buffer)
-{
-	FILE *filePointer = fopen(fileStr, "rb");
-
-	if(filePointer == NULL)
-	{
-		buffer = NULL;
-		return 0;
-	}
-	fseek(filePointer, 0, SEEK_END);
-	long fsize = ftell(filePointer);
-	fseek(filePointer, 0, SEEK_SET);
-
-	char *tmpBuffer = MallocOrDie(fsize + 1);
-	fread(tmpBuffer, 1, fsize, filePointer);
-	buffer[fsize] = '\0';
-	fclose(filePointer);
-	*buffer = tmpBuffer;
-	return fsize;
-}
-
-void LOG(char *str)
-{
-	FILE *fp;
-	fp = fopen("log.txt", "a");
-	fscanf(fp, "%s",str);
-	fclose(fp);
-}
 
 void *connection_handler(void *socket_desc)
 {
@@ -80,32 +14,30 @@ void *connection_handler(void *socket_desc)
 	int http_status_code = 200;
 	int sock = *(int*)socket_desc;
 
-	recv(sock, client_message , sizeof(client_message)/sizeof(client_message[0]), 0);
+	recv(sock, client_message, 2000, 0);
 
 	struct http_header request = parse_header(client_message);
 	if(request.method == NULL || request.file == NULL)
 		http_status_code = 400;
 
 	FILE *filePointer;
-    char *line = NULL;
-    size_t len = 0;
-    ssize_t read;
+    char line[255];
 	char *fileToRead = NULL;
     filePointer = fopen(".website_files", "r");
-    if (filePointer != NULL)
+    if (filePointer)
 	{
-		while ((read = getline(&line, &len, filePointer)) != -1)
+		while (fgets(line, 255, filePointer))
 		{
 			if(line[0] == '#')
 				continue;
 			strtok(line, "\n");
 			if(strcmp(strtok(line, " "), request.file) == 0)
 			{
-				fclose(filePointer);
 				fileToRead = strtok(NULL, " ");
 				break;
 			}
 		}
+		fclose(filePointer);
 	}
 	else
 	{
@@ -113,49 +45,75 @@ void *connection_handler(void *socket_desc)
 		http_status_code = 500;
 	}
 
-	if(fileToRead == NULL)
-		http_status_code = 404;
+	if(!fileToRead)
+	{
+		fileToRead = malloc(strlen("400.html")+1);
+		if(!fileToRead)
+		{
+			perror("malloc");
+			goto exit_func;
+		}
+		if(http_status_code == 200) /* aslong as no other error has occured we
+									   know that the error is that the
+									   requested file does not exist.*/
+			http_status_code = 404;
+	}
 
 	switch(http_status_code)
 	{
 		case 400:
-			strlcpy(response.header, "HHTTP/1.0 400 Bad Request",sizeof(response.header)/sizeof(char));
-			fileToRead = MallocOrDie(strlen("400.html")+1);
+			strlcpy(response.header, "HTTP/1.0 400 Bad Request",
+					sizeof(response.header)/sizeof(char));
 			strlcpy(fileToRead,"400.html", strlen("400.html")+1);
 			break;
 		case 404:
-			strlcpy(response.header, "HTTP/1.0 404 File Not Found",sizeof(response.header)/sizeof(char));
-			fileToRead = MallocOrDie(strlen("404.html")+1);
+			strlcpy(response.header, "HTTP/1.0 404 File Not Found",
+					sizeof(response.header)/sizeof(char));
 			strlcpy(fileToRead,"404.html", strlen("404.html")+1);
 			break;
 		case 500:
-			strlcpy(response.header, "HTTP/1.0 500 Internal Server Error",sizeof(response.header)/sizeof(char));
-			fileToRead = MallocOrDie(strlen("500.html")+1);
+			strlcpy(response.header, "HTTP/1.0 500 Internal Server Error",
+					sizeof(response.header)/sizeof(char));
 			strlcpy(fileToRead,"500.html", strlen("500.html")+1);
 			break;
 		case 200:
 		default:
-			strlcpy(response.header, "HTTP/1.0 200 OK",sizeof(response.header)/sizeof(char));
+			strlcpy(response.header, "HTTP/1.0 200 OK",
+					sizeof(response.header)/sizeof(char));
 	}
 	
 	/* Open and read the contents of the requested file. */
-	response.content_length = readFile(fileToRead, &response.data);
-	if(response.data == NULL)
+	FILE *fp;
+	if(!(fp = fopen(fileToRead, "rb")))
 	{
-		perror("Failed to open file.");
-		return 0;
+		perror("fopen");
+		goto exit_func;
 	}
+	fseek(fp, 0, SEEK_END);
+	response.content_length = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	
+	if(!(response.data = malloc(response.content_length + 1)))
+	{
+		perror("malloc");
+		goto exit_func;
+	}
+	fread(response.data, 1, response.content_length, fp);
+	fclose(fp);
 
 	/* Set a default value for content_type. */	
-	strlcpy(response.content_type, "application/octet-stream", sizeof(response.content_type)/sizeof(char));
+	strlcpy(response.content_type, "application/octet-stream",
+			sizeof(response.content_type)/sizeof(char));
 
 	strtok(fileToRead, ".");
 	char *fileExtension;
 	if((fileExtension = strtok(NULL, ".")))
 		for(size_t i = 0;i < sizeof(mimes)/sizeof(mimes[0])-1;i++)
 			if(strcmp(mimes[i].ext, fileExtension) == 0)
-				strlcpy(response.content_type, mimes[i].type, sizeof(response.content_type)/sizeof(char));
+				strlcpy(response.content_type, mimes[i].type,
+						sizeof(response.content_type)/sizeof(char));
 
+	
 
 	long long resp_length = response.content_length+
 			strlen("Content-Type: ")+
@@ -166,32 +124,32 @@ void *connection_handler(void *socket_desc)
 			strlen("\r\n")+
 			strlen("\r\n");
 
-	char *message = CallocOrDie(resp_length,sizeof(char));
+	char *message;
+	if(!(message = malloc(resp_length * sizeof(char))))
+	{
+		perror("malloc");
+		goto exit_func;
+	}
 
-	strcat(message,response.header);
+	strcpy(message,response.header);
 	strcat(message, "\r\n");
 	strcat(message, "Content-Type: ");
 	strcat(message,response.content_type);
 	strcat(message, "\r\n");
 	strcat(message, "\r\n");
 	strcat(message, "\r\n");
-	strcat(message,response.data);
+	memcpy(message+resp_length-response.content_length,response.data,
+			response.content_length);
 	
 	if(write(sock, message, resp_length) == -1)
 	{
-		perror("Failed to send message via socket.");
+		perror("write");
 	}
-	if(response.data)
-		free(response.data);
-	if(line)
-		free(line);
 
+exit_func:
+	free(response.data);
 	close(sock);
-	sock = -1;
-
-	if(socket_desc)
-		free(socket_desc);
-	
+	free(socket_desc);
 	return 0;
 }
 
@@ -206,7 +164,8 @@ int main(int argc, char **argv)
 			port = atoi(optarg);
 			break;
 		case 'h':
-			fprintf(stderr, "Usage: %s [-p PORT] -h(Print this message)\n", argv[0]);
+			fprintf(stderr,
+					"Usage: %s [-p PORT] -h(Print this message)\n", argv[0]);
 			exit(1);
 			break;
 		}
@@ -218,15 +177,18 @@ int main(int argc, char **argv)
 	startServer(&socket_desc, &server, port);
 
 	c = sizeof(struct sockaddr_in);
-	while((new_socket = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)))
+	while((new_socket =
+			accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)))
 	{
 		pthread_t sniffer_thread;
-		new_sock = MallocOrDie(1);
+		if(!(new_sock = malloc(1))) return 1;
 		*new_sock = new_socket;
 		
-		if(pthread_create(&sniffer_thread, NULL, connection_handler, (void*)new_sock) < 0)
+		if(pthread_create(&sniffer_thread,
+						NULL, connection_handler, (void*)new_sock) < 0)
 		{
 			perror("Unable to create a thread.");
+			return 1;
 		}
 		
 		pthread_join( sniffer_thread , NULL);
