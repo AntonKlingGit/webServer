@@ -1,3 +1,4 @@
+#define DEFAULT_PORT 1337
 
 /* mime-types */
 static const struct {

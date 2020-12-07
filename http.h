@@ -9,7 +9,8 @@ struct http_header
 };
 struct http_response
 {
-	char header[100];
+	char version[50];
+	char status[200];
 	char content_type[200];
 	long long content_length; 
 	char* data;
