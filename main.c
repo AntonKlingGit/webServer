@@ -21,10 +21,10 @@ void *connection_handler(void *socket_desc)
 		http_status_code = 400;
 
 	FILE *filePointer;
-    char line[255];
+	char line[255];
 	char *fileToRead = NULL;
-    filePointer = fopen(".website_files", "r");
-    if (filePointer)
+	filePointer = fopen(".website_files", "r");
+	if (filePointer)
 	{
 		while (fgets(line, 255, filePointer))
 		{
