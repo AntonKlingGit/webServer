@@ -1,6 +1,6 @@
 #include "socket.h"
 
-void start_server(int *socket_desc, struct sockaddr_in *server, short port)
+void init_server(int *socket_desc, struct sockaddr_in *server, short port)
 {
 	if(socket_desc == NULL)
 		exit(1);

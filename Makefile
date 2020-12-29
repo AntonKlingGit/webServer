@@ -1,8 +1,8 @@
 CC		= gcc
-CFLAGS	= -Wall -Wextra -Werror -pedantic -std=c99 -O3
-LIBS	= -lpthread -lbsd
+CFLAGS	= -Wall -Wextra -Wpedantic -Werror -std=c99 -O3 -g
+LIBS	= -pthread
 
-http_server: main.c socket.c http.c
+http_server: main.c socket.c
 	$(CC) $(CFLAGS) $(LIBS) $^ -o $@
 
 clean:

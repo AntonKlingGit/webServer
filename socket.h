@@ -8,5 +8,5 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void start_server(int *socket_desc, struct sockaddr_in *server, short port);
+void init_server(int *socket_desc, struct sockaddr_in *server, short port);
 #endif

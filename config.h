@@ -1,4 +1,5 @@
 #define DEFAULT_PORT 1337
+#define WEBSITE_ROOT "site"
 
 /* mime-types */
 static const struct {

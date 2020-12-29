@@ -1,146 +1,58 @@
+#define _GNU_SOURCE
 #include <pthread.h>
-#include <bsd/string.h>
+#include <string.h>
 #include <getopt.h>
 #include "config.h"
-#include "http.h"
 #include "socket.h"
+#include <unistd.h>
 
-int parse_website_file(char *file, char **output)
-{
-	*output = NULL;
-	char line[255];
-	FILE *filePointer;
-	filePointer = fopen(".website_files", "r");
-	if (!filePointer)
-	{
-		perror("fopen");
-		return 0;
-	}
+void *connection_handler(void *socket_desc);
+long read_file(const char *file, char **buffer, int *status_code);
+int parse_header(char *header, char **file);
+const char* get_mime(const char *file);
 
-	while (fgets(line, 255, filePointer))
-	{
-		if(line[0] == '#')
-			continue;
-		strtok(line, "\n");
-		if(strcmp(strtok(line, " "), file) == 0)
-		{
-			char *buffer = strtok(NULL, " ");
-			*output = malloc(strlen(buffer)+1);
-			strlcpy(*output, buffer, strlen(buffer)+1);
-			break;
-		}
-	}
-	fclose(filePointer);
-	return 1;
-}
-
-// TODO: Divide this function into smaller pieces
 void *connection_handler(void *socket_desc)
 {
-	struct http_response response;
-	char client_message[2000];
-	int http_status_code = 200;
 	int sock = *(int*)socket_desc;
-	
-	strlcpy(response.version, "HTTP/1.0 ",
-				sizeof(response.version));
-
-	recv(sock, client_message, 2000, 0);
-
-	struct http_header request = parse_header(client_message);
-	if(request.method == NULL || request.file == NULL)
-	{
-		http_status_code = 400;
-		goto request_error_handler;
-	}
 
 	char *requested_file;
-	if(!parse_website_file(request.file, &requested_file))
-	{
-		http_status_code = 500;;
-		goto request_error_handler;
-	}
-	else if(!requested_file)
-	{
-		http_status_code = 404;
-		goto request_error_handler;
-	}
-	
-	strlcpy(response.status, "200 OK",
-			sizeof(response.status));
 
-	if(0)
-	{
-request_error_handler:
-		requested_file = malloc(strlen("xxx.html")+1);
-		if(!requested_file)
-		{
-			perror("malloc");
-			goto exit_func;
-		}
+	char *response_data = NULL;
+	char response_version[50] = "HTTP/1.0 ",
+		 response_status[200] = "200 OK",
+	     response_content_type[200];
+	long long response_content_length;
 
-		switch(http_status_code)
-		{
-		case 400:
-			strlcpy(response.status, "400 Bad Request",
-					sizeof(response.status));
-			strlcpy(requested_file,"400.html", strlen("400.html")+1);
-			break;
-		case 404:
-			strlcpy(response.status, "404 File Not Found",
-					sizeof(response.status));
-			strlcpy(requested_file,"404.html", strlen("404.html")+1);
-			break;
-		case 500:
-			strlcpy(response.status, "500 Internal Server Error",
-					sizeof(response.status));
-			strlcpy(requested_file,"500.html", strlen("500.html")+1);
-			break;
-		}
-	}
+	char recv_buffer[2000];
+	recv(sock, recv_buffer, 2000, 0);
 
-	// Open and read the contents of the requested file.
-	FILE *fp;
-	if(!(fp = fopen(requested_file, "rb")))
-	{
-		perror("fopen");
+	strncpy(response_status, "200 OK", sizeof(response_status));
+
+	if(!parse_header(recv_buffer, &requested_file))
+		strncpy(response_status, "400 Bad Request", sizeof(response_status));
+
+	int status_code;
+	if((response_content_length =
+			read_file(requested_file, &response_data, &status_code)) < 0)
 		goto exit_func;
-	}
-	fseek(fp, 0, SEEK_END);
-	response.content_length = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-	if(!(response.data = malloc(response.content_length + 1)))
-	{
-		perror("malloc");
+
+	if(NULL == response_data)
 		goto exit_func;
-	}
-	fread(response.data, 1, response.content_length, fp);
-	fclose(fp);
 
-	// Set a default value for content_type.
-	strlcpy(response.content_type, "application/octet-stream",
-			sizeof(response.content_type));
-
-	strtok(requested_file, ".");
-	char *fileExtension;
-	if((fileExtension = strtok(NULL, ".")))
+	if(404 == status_code)
 	{
-		for(size_t i = 0;i < sizeof(mimes)/sizeof(mimes[0])-1;i++)
-		{
-			if(strcmp(mimes[i].ext, fileExtension) == 0)
-			{
-				strlcpy(response.content_type, mimes[i].type,
-						sizeof(response.content_type));
-			}
-		}
+		strncpy(response_status, "404 File Not Found", sizeof(response_status));
+		strncpy(response_content_type, get_mime("/404.html"), 200-1);
 	}
+	else
+		strncpy(response_content_type, get_mime(requested_file), 200-1);
 
-	long long respLength = response.content_length+
+	size_t respLength = response_content_length+
 			strlen("Content-Type: ")+
-			strlen(response.content_type)+
+			strlen(response_content_type)+
 			strlen("\r\n")+
-			strlen(response.version)+
-			strlen(response.status)+
+			strlen(response_version)+
+			strlen(response_status)+
 			strlen("\r\n")+
 			strlen("\r\n")+
 			strlen("\r\n")-2;
@@ -152,23 +64,26 @@ request_error_handler:
 		goto exit_func;
 	}
 
-	strcpy(message,response.version);
-	strcat(message,response.status);
+	strcpy(message,response_version);
+	strcat(message,response_status);
 	strcat(message, "\r\n");
 	strcat(message, "Content-Type: ");
-	strcat(message,response.content_type);
+	strcat(message,response_content_type);
 	strcat(message, "\r\n");
 	strcat(message, "\r\n");
 	strcat(message, "\r\n");
-	memcpy(message+respLength-response.content_length,response.data,
-			response.content_length+1);
+	/*
+		This is using memcpy instead of strcat since response_data may
+		contain binary data and therefore not be null terminated.
+	*/
+	memcpy(message+respLength-response_content_length,
+			response_data, response_content_length+1);  
 	
 	if(write(sock, message, respLength) == -1)
 		perror("write");
 
 exit_func:
-	free(requested_file);
-	free(response.data);
+	free(response_data);
 	close(sock);
 	free(socket_desc);
 	return 0;
@@ -176,6 +91,29 @@ exit_func:
 
 int main(int argc, char **argv)
 {
+	/* TODO: Drop privleges */
+	if(getuid() != 0)
+	{
+		fprintf(stderr,
+				"Error: Program must be started as root.");
+		return 1;
+	}
+
+	if(chroot(WEBSITE_ROOT) != 0)
+	{
+		perror("chroot");
+		return 1;
+	}
+
+	if(chdir("/") != 0) /* 
+						   I am unsure if this even can fail.
+						   But I will keep it here just in case.
+						*/
+	{
+		perror("chdir");
+		return 1;
+	}
+	
 	short port = DEFAULT_PORT;
 	int ch;
 	while ((ch = getopt(argc, argv, "p:h")) != -1)
@@ -195,26 +133,86 @@ int main(int argc, char **argv)
 	struct sockaddr_in server, client;
 
 	int new_socket, c, *new_sock;
-	start_server(&socket_desc, &server, port);
+	init_server(&socket_desc, &server, port);
 
 	c = sizeof(struct sockaddr_in);
-	while((new_socket =
-			accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)))
+	while((new_socket = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)))
 	{
-		pthread_t sniffer_thread;
+		pthread_t connection_thread;
 		if(!(new_sock = malloc(1))) return 1;
 		*new_sock = new_socket;
 		
-		if(pthread_create(&sniffer_thread,
-						NULL, connection_handler, (void*)new_sock) < 0)
+		if(pthread_create(&connection_thread, NULL, connection_handler, (void*)new_sock) < 0)
 		{
 			perror("Unable to create a thread.");
 			return 1;
 		}
 		
-		pthread_join( sniffer_thread , NULL);
+		pthread_join(connection_thread, NULL);
 	}
 	close(socket_desc);
 
 	return 0;
+}
+
+int parse_header(char *header, char **file)
+{
+	if(!strtok(header, " ") || !(*file = strtok(NULL, "")) || !(*file = strtok(*file, " ")))
+	{
+		*file ="/400.html";
+		return 0;
+	}
+
+	if(strcmp(*file, "") == 0 || strcmp(*file, "/") == 0)
+		*file = "/index.html";
+
+	return 1;
+}
+
+const char* get_mime(const char *file)
+{
+	char fileExtension[strlen(file)+1];
+	strcpy(fileExtension, file);
+	fileExtension[strlen(file)] = '\0';
+	if(strtok(fileExtension, ".") == NULL)
+		return "application/octet-stream";
+
+	if((strncpy(fileExtension, strtok(NULL, "."), strlen(file))))
+	{
+		for(size_t i = 0;i < sizeof(mimes)/sizeof(mimes[0])-1;i++)
+		{
+			if(strcmp(mimes[i].ext, fileExtension) == 0)
+				return mimes[i].type;
+		}
+	}
+	return "application/octet-stream";
+}
+
+long read_file(const char *file, char **buffer, int *status_code)
+{
+	*status_code = 200;
+	long length;
+	FILE *fp;
+	if(!(fp = fopen(file, "rb")))
+	{
+		if(strcmp(file, "/404.html") != 0)
+		{
+			*status_code = 404;
+			return read_file("/404.html", buffer, status_code);
+		}
+		return -1;
+	}
+	fseek(fp, 0, SEEK_END);
+	length = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+
+	if(!(*buffer = malloc(length + 1)))
+	{
+		perror("malloc");
+		return -1;
+	}
+	fread(*buffer, 1, length, fp);
+	fclose(fp);
+	
+	return length;
 }
