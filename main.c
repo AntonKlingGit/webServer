@@ -5,6 +5,7 @@
 #include "config.h"
 #include "socket.h"
 #include <unistd.h>
+#include <assert.h>
 
 #define RECV_BUFFER 2000
 
@@ -18,7 +19,6 @@ void *connection_handler(void *socket_desc)
 	int sock = *(int*)socket_desc;
 
 	char *requested_file;
-
 	char *response_data = NULL;
 	char response_version[50] = "HTTP/1.0 ",
 		 response_status[200] = "200 OK",
@@ -26,7 +26,11 @@ void *connection_handler(void *socket_desc)
 	long long response_content_length;
 
 	char recv_buffer[RECV_BUFFER];
-	recv(sock, recv_buffer, RECV_BUFFER, 0);
+	if(recv(sock, recv_buffer, RECV_BUFFER, 0) == -1)
+	{
+		perror("recv");
+		goto exit_func;
+	}
 
 	strncpy(response_status, "200 OK", sizeof(response_status));
 
@@ -70,9 +74,7 @@ void *connection_handler(void *socket_desc)
 	strcat(message, "\r\n");
 	strcat(message, "Content-Type: ");
 	strcat(message,response_content_type);
-	strcat(message, "\r\n");
-	strcat(message, "\r\n");
-	strcat(message, "\r\n");
+	strcat(message, "\r\n\r\n\r\n");
 	/*
 		This is using memcpy instead of strcat since response_data may
 		contain binary data and therefore not be null terminated.
@@ -157,9 +159,13 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
+	const struct timeval sock_timeout={.tv_sec=5, .tv_usec=0};
+	setsockopt(socket_desc, SOL_SOCKET, SO_RCVTIMEO, (char*)&sock_timeout, sizeof(sock_timeout));
+
 	c = sizeof(struct sockaddr_in);
 	while((new_socket = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)))
 	{
+		if(new_socket == -1) continue;
 		pthread_t connection_thread;
 		if(!(new_sock = malloc(sizeof(int*)))) return 1;
 		*new_sock = new_socket;
@@ -187,7 +193,7 @@ int parse_header(char *header, char **file)
 		return 0;
 	}
 
-	if(**file == '\0' || **file == '/')
+	if(**file == '\0' || (**file == '/' && (*file)[1] == '\0'))
 		*file = "/index.html";
 
 	return 1;
