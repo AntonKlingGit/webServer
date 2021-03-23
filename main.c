@@ -3,14 +3,20 @@
 #include <string.h>
 #include <getopt.h>
 #include "config.h"
-#include "socket.h"
 #include <unistd.h>
 #include <assert.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define RECV_BUFFER 2000
 
 void *connection_handler(void *socket_desc);
-long read_file(const char *file, char **buffer, int *status_code);
+long read_file(char **file, char **buffer, int *status_code);
 int parse_header(char *header, char **file);
 void get_mime(const char *file, char content_type[200]);
 
@@ -39,28 +45,22 @@ void *connection_handler(void *socket_desc)
 
 	int status_code;
 	if((response_content_length =
-			read_file(requested_file, &response_data, &status_code)) < 0 ||
+			read_file(&requested_file, &response_data, &status_code)) < 0 ||
 			NULL == response_data)
 		goto exit_func;
 
-	if(404 == status_code)
-	{
+	if(200 != status_code)
 		strncpy(response_status, "404 File Not Found",
 				sizeof(response_status));
-		get_mime("/404.html", response_content_type);
-	}
-	else
-		get_mime(requested_file, response_content_type);
+
+	get_mime(requested_file, response_content_type);
 
 	size_t respLength = response_content_length+
-			strlen("Content-Type: ")+
+			strlen("Content-Type: \r\n")+
 			strlen(response_content_type)+
-			strlen("\r\n")+
 			strlen(response_version)+
 			strlen(response_status)+
-			strlen("\r\n")+
-			strlen("\r\n")+
-			strlen("\r\n")-2;
+			strlen("\r\n\r\n\r\n")-2;
 
 	char *message;
 	if(!(message = malloc(respLength)))
@@ -69,14 +69,10 @@ void *connection_handler(void *socket_desc)
 		goto exit_func;
 	}
 
-	strcpy(message,response_version);
-	strcat(message,response_status);
-	strcat(message, "\r\n");
-	strcat(message, "Content-Type: ");
-	strcat(message,response_content_type);
-	strcat(message, "\r\n\r\n\r\n");
+	sprintf(message, "%s%s\r\nContent-Type: %s\r\n\r\n\r\n",response_version, response_status,
+			response_content_type);
 	/*
-		This is using memcpy instead of strcat since response_data may
+		This is using memcpy instead of sprintf since response_data may
 		contain binary data and therefore not be null terminated.
 	*/
 	memcpy(message+respLength-response_content_length,
@@ -159,7 +155,10 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	const struct timeval sock_timeout={.tv_sec=5, .tv_usec=0};
+	const struct timeval sock_timeout={
+		.tv_sec=SOCK_S_TIMEOUT,
+		.tv_usec=SOCK_US_TIMEOUT};
+
 	setsockopt(socket_desc, SOL_SOCKET, SO_RCVTIMEO, (char*)&sock_timeout, sizeof(sock_timeout));
 
 	c = sizeof(struct sockaddr_in);
@@ -172,7 +171,7 @@ int main(int argc, char **argv)
 		
 		if(pthread_create(&connection_thread, NULL, connection_handler, (void*)new_sock) < 0)
 		{
-			perror("Unable to create a thread.");
+			perror("pthread_create");
 			return 1;
 		}
 		
@@ -208,6 +207,9 @@ void get_mime(const char *file, char content_type[200])
 	if(strtok(fileExtension, ".") != NULL)
 	{
 		const char * ext = strtok(NULL, ".");
+		if(ext == NULL)
+			goto exit;
+
 		for(size_t i = 0;i < sizeof(mimes)/sizeof(mimes[0])-1;i++)
 			if(strcmp(mimes[i].ext, ext) == 0)
 			{
@@ -217,20 +219,25 @@ void get_mime(const char *file, char content_type[200])
 			}
 	}
 
+exit:
 	strncpy(content_type, "application/octet-stream", sizeof(char[200])-1);
 	content_type[sizeof(char[200])-1] = 0;
 }
 
-long read_file(const char *file, char **buffer, int *status_code)
+long read_file(char **file, char **buffer, int *status_code)
 {
+	if(strcmp(*file, "/404.html") != 0)
+		*status_code = 200;
+
 	FILE *fp;
-	if(!(fp = fopen(file, "rb")))
+	if(!(fp = fopen(*file, "rb")))
 	{
-		if(strcmp(file, "/404.html") == 0)
+		if(strcmp(*file, "/404.html") == 0)
 			return -1;
 
 		*status_code = 404;
-		return read_file("/404.html", buffer, status_code);
+		*file = "/404.html";
+		return read_file(file, buffer, status_code);
 	}
 
 	fseek(fp, 0, SEEK_END);
@@ -245,6 +252,5 @@ long read_file(const char *file, char **buffer, int *status_code)
 	fread(*buffer, 1, length, fp);
 	fclose(fp);
 
-	*status_code = 200;
 	return length;
 }

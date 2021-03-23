@@ -1,5 +1,8 @@
 #define DEFAULT_PORT 1337
-#define WEBSITE_ROOT "site"
+#define WEBSITE_ROOT "./site"
+
+#define SOCK_S_TIMEOUT 5 // Seconds
+#define SOCK_US_TIMEOUT 0 // Microseconds
 
 /* mime-types */
 static const struct {
